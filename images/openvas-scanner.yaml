@@ -1,0 +1,65 @@
+FROM ubuntu:20.04 AS Builder
+
+ADD shell/build-gvm-lib.sh /tmp/build-gvm-lib.sh
+
+ARG VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+ENV VERSION=${VERSION}
+
+# build openvas-scanner
+RUN  apt update -y && apt install -y curl gcc pkg-config libssh-gcrypt-dev libgnutls28-dev \
+libglib2.0-dev libjson-glib-dev libpcap-dev libgpgme-dev bison libksba-dev \
+libsnmp-dev libgcrypt20-dev python3 python3-virtualenv
+
+RUN /tmp/build-gvm-lib.sh
+
+RUN curl -s -o /tmp/openvas-scanner.tar.gz https://codeload.github.com/greenbone/openvas-scanner/tar.gz/refs/tags/v${VERSION} \
+  && cd /tmp/ \
+  && tar -zxf openvas-scanner.tar.gz \
+  && cd openvas-scanner-$VERSION \
+  && export PKG_CONFIG_PATH=/opt/gvm/lib/pkgconfig:$PKG_CONFIG_PATH \
+  && mkdir build && cd build \
+  && cmake -DCMAKE_INSTALL_PREFIX=/opt/gvm .. \
+  && make && make install
+
+RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py \
+  && python3 get-pip.py \
+  && curl -s -o /tmp/ospd-openvas.tar.gz https://codeload.github.com/greenbone/ospd-openvas/tar.gz/refs/tags/v${VERSION} \
+  && cd /opt/gvm && virtualenv ospd-scanner && ospd-scanner/bin/pip install ospd \
+  && ospd-scanner/bin/pip install /tmp/ospd-openvas.tar.gz
+
+
+FROM ubuntu:20.04
+
+WORKDIR /opt/gvm
+
+COPY --from=Builder /opt/gvm .
+ADD config/ /tmp/config
+
+RUN adduser --system --no-create-home --shell /bin/false --group --disabled-login gvm
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt update -y && apt install -y curl redis-server rsync libglib2.0-dev libpcap-dev \
+  libgpgme-dev libssh-gcrypt-dev libgnutls28-dev libjson-glib-dev libsnmp-dev libgcrypt20-dev \
+  libssh-gcrypt-dev libhiredis-dev libxml2-dev libnet1-dev
+
+RUN  echo "/opt/gvm/lib" >>  /etc/ld.so.conf.d/openvas.conf \
+  && ldconfig \
+  && mv /etc/redis/redis.conf /etc/redis/redis.conf.bak \
+  &&  mv /tmp/config/redis.conf /etc/redis/redis.conf \
+  &&  chown gvm:gvm -R /etc/redis/ \
+  &&  rm -rf /etc/systemd/system/redis.service \
+  && echo "db_address=/opt/gvm/var/run/redis/redis.sock" >> /opt/gvm/etc/openvas/openvas.conf \
+  &&  ln -s /opt/gvm/bin/* /usr/local/bin/ && ln -s /opt/gvm/sbin/* /usr/local/sbin/ \
+  && mkdir /opt/gvm/var/run/redis/ && mkdir /opt/gvm/var/log/redis/ \
+  && chown gvm:gvm -R /opt/gvm/
+
+RUN apt autoremove && apt clean && rm -rf /tmp/*
+
+USER gvm:gvm
+
+# sync nvt feed
+RUN redis-server /etc/redis/redis.conf \
+  && /opt/gvm/bin/greenbone-nvt-sync && openvas -u
+
+ENTRYPOINT [ "/bin/bash", "-l", "-c" ]

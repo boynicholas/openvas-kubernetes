@@ -1,0 +1,21 @@
+FROM ubuntu:20.04
+
+ADD shell/build-gvm-lib.sh /tmp/build-gvm-lib.sh
+
+ARG VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+ENV VERSION=${VERSION}
+
+RUN apt upgrade -y install curl \
+  && echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && curl -o - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - \
+  && apt upgrade -y \
+  && apt-get install gcc cmake libglib2.0-dev libgnutls28-dev libpq-dev pkg-config libical-dev xsltproc postgresql-server-dev-all \
+  && export PKG_CONFIG_PATH=/opt/gvm/lib/pkgconfig:$PKG_CONFIG_PATH \
+  && curl -s -o /tmp/gvmd.tar.gz https://codeload.github.com/greenbone/gvmd/tar.gz/refs/tags/v${VERSION} \
+  && cd /tmp/ \
+  && tar -zxf gvmd.tar.gz \
+  && cd gvmd-$VERSION \
+  && cmake -DCMAKE_INSTALL_PREFIX=/opt/gvm -DGVM_SCANNER_CERTIFICATE= .. \
+  && make && make install \
+  && ln -s /opt/gvm/bin/* /usr/local/bin/ && ln -s /opt/gvm/sbin/* /usr/local/sbin/ \
